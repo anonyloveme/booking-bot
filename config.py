@@ -6,6 +6,7 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '7026021540')
 
 # Zalo Bot
 ZALO_BOT_TOKEN = os.environ.get('ZALO_BOT_TOKEN', '1791525309981773257:OJLOWtxoMNhZyegQfKderfWZibbBmjbhhNvZZRRUQgvuDgymEpPzhxGfnYajHKeE')
+ZALO_SECRET_TOKEN = os.environ.get('ZALO_SECRET_TOKEN', 'ymd7w-W6kp-uL9QUrs')
 
 # Google Sheets
 SHEET_ID = os.environ.get('SHEET_ID', '1V0KtvRjKn1sNLXgHEHs3Q0a2mz1y_HP9-evKU2CUyiw')
