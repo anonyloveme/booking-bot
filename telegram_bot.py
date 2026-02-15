@@ -7,7 +7,6 @@ import sheets
 API = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}"
 
 def send_message(chat_id, text, reply_markup=None, parse_mode='HTML'):
-    """Gửi tin nhắn Telegram"""
     payload = {
         'chat_id': chat_id,
         'text': text,
@@ -19,7 +18,6 @@ def send_message(chat_id, text, reply_markup=None, parse_mode='HTML'):
     return resp.json()
 
 def edit_message(chat_id, message_id, text, reply_markup=None):
-    """Chỉnh sửa tin nhắn"""
     payload = {
         'chat_id': chat_id,
         'message_id': message_id,
@@ -32,14 +30,12 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
     return resp.json()
 
 def answer_callback(callback_id, text=''):
-    """Trả lời callback query"""
     requests.post(f"{API}/answerCallbackQuery", json={
         'callback_query_id': callback_id,
         'text': text
     }, timeout=10)
 
 def notify_new_booking(booking_id, data, date_formatted):
-    """Gửi thông báo booking mới cho admin"""
     msg = (
         f"✂️ <b>LỊCH HẸN MỚI</b> ✂️\n"
         f"━━━━━━━━━━━━━━━\n\n"
@@ -61,7 +57,7 @@ def notify_new_booking(booking_id, data, date_formatted):
         f"⏰ <i>Nhận lúc: {datetime.now().strftime('%H:%M %d/%m/%Y')}</i>\n"
         f"📱 <i>Nguồn: {data.get('source', 'Website')}</i>"
     )
-    
+
     keyboard = {
         'inline_keyboard': [
             [
@@ -73,51 +69,49 @@ def notify_new_booking(booking_id, data, date_formatted):
             ]
         ]
     }
-    
+
     return send_message(config.TELEGRAM_CHAT_ID, msg, keyboard)
 
 def handle_callback(callback):
-    """Xử lý nút bấm"""
     data = callback.get('data', '')
     chat_id = callback['message']['chat']['id']
     message_id = callback['message']['message_id']
     original_text = callback['message'].get('text', '')
-    
+
     if data.startswith('confirm_'):
         booking_id = data.replace('confirm_', '')
         row = sheets.update_status(booking_id, '✅ Đã xác nhận')
         answer_callback(callback['id'], '✅ Đã xác nhận!')
-        
+
         new_text = original_text + f"\n\n✅ <b>ĐÃ XÁC NHẬN</b> - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
         keyboard = {
             'inline_keyboard': [
                 [{'text': '✂️ Hoàn thành', 'callback_data': f'complete_{booking_id}'}],
-                [{'text': f"📞 Gọi khách", 'url': f"tel:{row[2] if row else ''}"}]
+                [{'text': '📞 Gọi khách', 'url': f"tel:{row[2] if row else ''}"}]
             ]
         }
         edit_message(chat_id, message_id, new_text, keyboard)
-    
+
     elif data.startswith('reject_'):
         booking_id = data.replace('reject_', '')
         sheets.update_status(booking_id, '❌ Đã từ chối')
         answer_callback(callback['id'], '❌ Đã từ chối!')
-        
+
         new_text = original_text + f"\n\n❌ <b>ĐÃ TỪ CHỐI</b> - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
         edit_message(chat_id, message_id, new_text)
-    
+
     elif data.startswith('complete_'):
         booking_id = data.replace('complete_', '')
         sheets.update_status(booking_id, '✅ Đã hoàn thành')
         answer_callback(callback['id'], '✅ Đã hoàn thành!')
-        
+
         new_text = original_text + f"\n\n✅ <b>ĐÃ HOÀN THÀNH</b> - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
         edit_message(chat_id, message_id, new_text)
 
 def handle_command(message):
-    """Xử lý lệnh từ admin"""
     chat_id = message['chat']['id']
     text = message.get('text', '').strip()
-    
+
     if text == '/start' or text == '/help':
         msg = (
             "🏠 <b>BarberShop Manager Bot</b>\n\n"
@@ -131,7 +125,7 @@ def handle_command(message):
             "/help — Hướng dẫn sử dụng"
         )
         send_message(chat_id, msg)
-    
+
     elif text == '/today':
         today = datetime.now().strftime('%d/%m/%Y')
         bookings = sheets.get_bookings_by_date(today)
@@ -144,7 +138,7 @@ def handle_command(message):
             msg += f"🕐 <b>{b[6]}</b> — {b[1]} ({b[2]})\n💈 {b[4]} | {status}\n\n"
         msg += f"📊 Tổng: <b>{len(bookings)}</b> lịch hẹn"
         send_message(chat_id, msg)
-    
+
     elif text == '/tomorrow':
         tmr = (datetime.now() + timedelta(days=1)).strftime('%d/%m/%Y')
         bookings = sheets.get_bookings_by_date(tmr)
@@ -157,7 +151,7 @@ def handle_command(message):
             msg += f"🕐 <b>{b[6]}</b> — {b[1]} ({b[2]})\n💈 {b[4]} | {status}\n\n"
         msg += f"📊 Tổng: <b>{len(bookings)}</b> lịch hẹn"
         send_message(chat_id, msg)
-    
+
     elif text == '/all':
         bookings = sheets.get_bookings_by_status('Chờ')
         if not bookings:
@@ -168,7 +162,7 @@ def handle_command(message):
             msg += f"🆔 {b[0]} | {b[1]} ({b[2]})\n📅 {b[5]} 🕐 {b[6]} | 💈 {b[4]}\n\n"
         msg += f"📊 Tổng: <b>{len(bookings)}</b> đơn"
         send_message(chat_id, msg)
-    
+
     elif text == '/done':
         bookings = sheets.get_bookings_by_status('hoàn thành')
         if not bookings:
@@ -179,7 +173,7 @@ def handle_command(message):
             msg += f"🆔 {b[0]} | {b[1]} ({b[2]})\n📅 {b[5]} 🕐 {b[6]} | 💈 {b[4]}\n\n"
         msg += f"📊 Tổng: <b>{len(bookings)}</b> đơn"
         send_message(chat_id, msg)
-    
+
     elif text.startswith('/find'):
         keyword = text.replace('/find', '').strip()
         if not keyword:
@@ -194,7 +188,7 @@ def handle_command(message):
             status = b[8] if len(b) > 8 else '?'
             msg += f"🆔 {b[0]} | {b[1]} ({b[2]})\n📅 {b[5]} 🕐 {b[6]} | 💈 {b[4]}\n{status}\n\n"
         send_message(chat_id, msg)
-    
+
     elif text == '/stats':
         s = sheets.get_stats()
         msg = (
@@ -210,7 +204,6 @@ def handle_command(message):
         send_message(chat_id, msg)
 
 def set_webhook(url):
-    """Đặt webhook"""
     resp = requests.post(f"{API}/setWebhook", json={
         'url': f"{url}/telegram",
         'drop_pending_updates': True
@@ -218,7 +211,6 @@ def set_webhook(url):
     return resp.json()
 
 def delete_webhook():
-    """Xóa webhook"""
     resp = requests.post(f"{API}/deleteWebhook", json={
         'drop_pending_updates': True
     }, timeout=10)
