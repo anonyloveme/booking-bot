@@ -7,33 +7,35 @@ import sheets
 ZALO_API = f"https://bot-api.zaloplatforms.com/bot{config.ZALO_BOT_TOKEN}"
 
 def send_message(chat_id, text):
-    """Gửi tin nhắn Zalo"""
     payload = {
         'chat_id': chat_id,
         'text': text
     }
     resp = requests.post(f"{ZALO_API}/sendMessage", json=payload, timeout=10)
+    print(f"Zalo sendMessage response: {resp.status_code} {resp.text}")
     return resp.json()
 
 def handle_zalo_update(data):
-    """Xử lý update từ Zalo webhook"""
-    result = data.get('result', {})
-    event = result.get('event_name', '')
-    
-    if event == 'message.text.received':
-        message = result.get('message', {})
-        chat_id = message.get('chat', {}).get('id', '')
-        text = message.get('text', '').strip()
-        sender_name = message.get('from', {}).get('display_name', 'Khách')
-        
-        handle_zalo_message(chat_id, text, sender_name)
+    try:
+        result = data.get('result', {})
+        event = result.get('event_name', '')
+        print(f"Zalo event: {event}")
+
+        if event == 'message.text.received':
+            message = result.get('message', {})
+            chat_id = message.get('chat', {}).get('id', '')
+            text = message.get('text', '').strip()
+            sender_name = message.get('from', {}).get('display_name', 'Khách')
+
+            print(f"Zalo message from {sender_name}: {text}")
+            handle_zalo_message(chat_id, text, sender_name)
+    except Exception as e:
+        print(f"Zalo handle error: {e}")
 
 def handle_zalo_message(chat_id, text, sender_name):
-    """Xử lý tin nhắn Zalo từ khách hàng"""
     text_lower = text.lower()
-    
-    # Lệnh /start hoặc chào
-    if text_lower in ['/start', 'hi', 'hello', 'xin chào', 'chào', 'đặt lịch', 'book']:
+
+    if text_lower in ['/start', 'hi', 'hello', 'xin chào', 'chào', 'đặt lịch', 'book', 'start']:
         msg = (
             "✂️ BarberShop - Đặt Lịch Cắt Tóc\n"
             "━━━━━━━━━━━━━━━\n\n"
@@ -63,26 +65,23 @@ def handle_zalo_message(chat_id, text, sender_name):
             "Ghi chú: Cắt kiểu Undercut"
         )
         send_message(chat_id, msg)
-    
+
     elif text_lower.startswith('datlich'):
-        # Parse thông tin đặt lịch
         booking_data = parse_zalo_booking(text, sender_name)
-        
+
         if not booking_data.get('fullname') or not booking_data.get('phone'):
             send_message(chat_id, "⚠️ Thiếu thông tin! Vui lòng nhập đầy đủ Họ tên và SĐT.\n\nGõ 'đặt lịch' để xem hướng dẫn.")
             return
-        
+
         booking_data['source'] = 'Zalo'
-        
-        # Chuyển ngày sang yyyy-mm-dd để lưu
+
+        # Chuyển ngày dd/mm/yyyy sang yyyy-mm-dd
         date_parts = booking_data.get('date', '').split('/')
         if len(date_parts) == 3:
             booking_data['date'] = f"{date_parts[2]}-{date_parts[1]}-{date_parts[0]}"
-        
-        # Lưu vào Sheet
+
         booking_id, date_formatted = sheets.add_booking(booking_data)
-        
-        # Gửi xác nhận cho khách
+
         confirm_msg = (
             f"✅ Đặt lịch thành công!\n\n"
             f"🆔 Mã: {booking_id}\n"
@@ -93,12 +92,12 @@ def handle_zalo_message(chat_id, text, sender_name):
             f"Chúng tôi sẽ liên hệ xác nhận sớm nhất!"
         )
         send_message(chat_id, confirm_msg)
-        
+
         # Thông báo admin qua Telegram
         from telegram_bot import notify_new_booking
         notify_new_booking(booking_id, booking_data, date_formatted)
-    
-    elif text_lower in ['menu', 'dịch vụ', 'bảng giá', 'giá']:
+
+    elif text_lower in ['menu', 'dịch vụ', 'bảng giá', 'giá', 'dich vu', 'bang gia', 'gia']:
         msg = (
             "💈 BẢNG GIÁ DỊCH VỤ\n"
             "━━━━━━━━━━━━━━━\n\n"
@@ -111,12 +110,11 @@ def handle_zalo_message(chat_id, text, sender_name):
             "Gõ 'đặt lịch' để bắt đầu đặt lịch!"
         )
         send_message(chat_id, msg)
-    
+
     else:
         send_message(chat_id, "Xin chào! Gõ 'đặt lịch' để đặt lịch cắt tóc hoặc 'menu' để xem bảng giá.")
 
 def parse_zalo_booking(text, sender_name):
-    """Phân tích tin nhắn đặt lịch từ Zalo"""
     data = {
         'fullname': sender_name,
         'phone': '',
@@ -126,15 +124,15 @@ def parse_zalo_booking(text, sender_name):
         'time': '',
         'note': ''
     }
-    
+
     lines = text.split('\n')
     for line in lines:
         line = line.strip()
         lower = line.lower()
-        
-        if lower.startswith('họ tên:') or lower.startswith('ho ten:') or lower.startswith('tên:'):
+
+        if lower.startswith('họ tên:') or lower.startswith('ho ten:') or lower.startswith('tên:') or lower.startswith('ten:'):
             data['fullname'] = line.split(':', 1)[1].strip()
-        elif lower.startswith('sđt:') or lower.startswith('sdt:') or lower.startswith('số:') or lower.startswith('phone:'):
+        elif lower.startswith('sđt:') or lower.startswith('sdt:') or lower.startswith('số:') or lower.startswith('phone:') or lower.startswith('so:'):
             data['phone'] = line.split(':', 1)[1].strip()
         elif lower.startswith('email:'):
             data['email'] = line.split(':', 1)[1].strip()
@@ -146,12 +144,13 @@ def parse_zalo_booking(text, sender_name):
             data['time'] = line.split(':', 1)[1].strip()
         elif lower.startswith('ghi chú:') or lower.startswith('ghi chu:') or lower.startswith('note:'):
             data['note'] = line.split(':', 1)[1].strip()
-    
+
     return data
 
 def set_webhook(url):
-    """Đặt webhook Zalo"""
     resp = requests.post(f"{ZALO_API}/setWebhook", json={
-        'url': f"{url}/zalo"
+        'url': f"{url}/zalo",
+        'secret_token': config.ZALO_SECRET_TOKEN
     }, timeout=10)
+    print(f"Zalo setWebhook response: {resp.status_code} {resp.text}")
     return resp.json()
