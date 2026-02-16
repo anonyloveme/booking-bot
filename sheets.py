@@ -24,14 +24,24 @@ def get_today_str():
 
 
 def generate_booking_id(sheet):
-    """Tạo mã DUC01, DUC02... reset mỗi ngày"""
+    """Tạo mã DUC01, DUC02... không bao giờ trùng trong ngày"""
     data = sheet.get_all_values()
     today = get_today_str()
-    count = 0
+
+    # Tìm số lớn nhất hiện có trong ngày
+    max_num = 0
     for row in data[1:]:
         if len(row) >= 10 and today in row[9]:
-            count += 1
-    return f"DUC{count + 1:02d}"
+            bid = row[0]
+            if bid.startswith('DUC'):
+                try:
+                    num = int(bid.replace('DUC', ''))
+                    if num > max_num:
+                        max_num = num
+                except:
+                    pass
+
+    return f"DUC{max_num + 1:02d}"
 
 
 def add_booking(data):
@@ -39,7 +49,6 @@ def add_booking(data):
     booking_id = generate_booking_id(sheet)
     now = datetime.now().strftime('%H:%M %d/%m/%Y')
 
-    # Chuyển yyyy-mm-dd sang dd/mm/yyyy
     date_raw = data.get('date', '')
     date_parts = date_raw.split('-')
     if len(date_parts) == 3:
@@ -48,19 +57,18 @@ def add_booking(data):
         date_formatted = date_raw
 
     row = [
-        booking_id,                     # A
-        data.get('fullname', ''),       # B
-        data.get('phone', ''),          # C
-        data.get('email', ''),          # D
-        data.get('service', ''),        # E
-        date_formatted,                 # F
-        data.get('time', ''),           # G
-        data.get('note', ''),           # H
-        '⏳ Chờ xác nhận',              # I
-        now                             # J
+        booking_id,
+        data.get('fullname', ''),
+        data.get('phone', ''),
+        data.get('email', ''),
+        data.get('service', ''),
+        date_formatted,
+        data.get('time', ''),
+        data.get('note', ''),
+        '⏳ Chờ xác nhận',
+        now
     ]
 
-    # Ghi trực tiếp vào đúng range A:J (tránh bị lệch cột)
     all_data = sheet.get_all_values()
     next_row = len(all_data) + 1
     sheet.update(f'A{next_row}:J{next_row}', [row])
@@ -70,12 +78,43 @@ def add_booking(data):
 
 
 def update_status(booking_id, new_status):
+    """Cập nhật trạng thái — tìm đúng dòng có mã đơn khớp"""
     sheet = get_sheet()
     data = sheet.get_all_values()
+
+    # Tìm dòng có booking_id khớp (ưu tiên đơn chưa xử lý)
+    target_row = -1
+    target_data = None
+
     for i, row in enumerate(data):
         if len(row) > 0 and row[0] == booking_id:
-            sheet.update_cell(i + 1, 9, new_status)
-            return row
+            # Nếu là confirm → tìm đơn đang "Chờ"
+            if 'xác nhận' in new_status.lower() and 'Chờ' not in new_status:
+                if len(row) > 8 and 'Chờ' in row[8]:
+                    target_row = i
+                    target_data = row
+            # Nếu là complete → tìm đơn đang "Đã xác nhận"
+            elif 'hoàn thành' in new_status.lower():
+                if len(row) > 8 and 'Đã xác nhận' in row[8]:
+                    target_row = i
+                    target_data = row
+            # Nếu là reject → tìm đơn đang "Chờ"
+            elif 'từ chối' in new_status.lower():
+                if len(row) > 8 and 'Chờ' in row[8]:
+                    target_row = i
+                    target_data = row
+            else:
+                # Fallback: lấy dòng đầu tiên khớp mã
+                if target_row == -1:
+                    target_row = i
+                    target_data = row
+
+    if target_row >= 0:
+        sheet.update_cell(target_row + 1, 9, new_status)
+        print(f"Sheet: {booking_id} row {target_row + 1} -> {new_status}")
+        return target_data
+
+    print(f"Sheet: {booking_id} NOT FOUND")
     return None
 
 
@@ -119,7 +158,7 @@ def get_stats():
     return {
         'total': len(rows),
         'pending': sum(1 for r in rows if len(r) > 8 and 'Chờ' in r[8]),
-        'confirmed': sum(1 for r in rows if len(r) > 8 and 'xác nhận' in r[8] and 'Chờ' not in r[8]),
+        'confirmed': sum(1 for r in rows if len(r) > 8 and 'Đã xác nhận' in r[8]),
         'completed': sum(1 for r in rows if len(r) > 8 and 'hoàn thành' in r[8].lower()),
         'rejected': sum(1 for r in rows if len(r) > 8 and 'từ chối' in r[8].lower()),
         'today': sum(1 for r in rows if len(r) > 5 and r[5] == today)
@@ -160,7 +199,7 @@ def get_daily_summary():
         'date': get_today_str(),
         'total': len(rows),
         'completed': sum(1 for r in rows if len(r) > 8 and 'hoàn thành' in r[8].lower()),
-        'confirmed': sum(1 for r in rows if len(r) > 8 and 'xác nhận' in r[8] and 'Chờ' not in r[8]),
+        'confirmed': sum(1 for r in rows if len(r) > 8 and 'Đã xác nhận' in r[8]),
         'rejected': sum(1 for r in rows if len(r) > 8 and 'từ chối' in r[8].lower()),
         'pending': sum(1 for r in rows if len(r) > 8 and 'Chờ' in r[8]),
         'customers': customers
