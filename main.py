@@ -8,25 +8,81 @@ import threading
 import time
 import json
 import traceback
+from datetime import datetime
 import requests as http_requests
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 
-# ===== KEEP ALIVE =====
-def keep_alive():
+# ===== KEEP ALIVE + AUTO RESET =====
+last_reset_date = datetime.now().strftime('%Y-%m-%d')
+
+def keep_alive_and_reset():
+    global last_reset_date
     while True:
-        time.sleep(600)
+        time.sleep(300)  # Kiểm tra mỗi 5 phút
+
         try:
+            # Keep alive ping
             url = config.RENDER_URL or 'https://booking-bot-df6q.onrender.com'
             http_requests.get(url, timeout=10)
-            print("Keep-alive ping OK")
-        except Exception as e:
-            print(f"Keep-alive error: {e}")
 
-keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
-keep_alive_thread.start()
+            # Kiểm tra reset hàng ngày (lúc 00:00 - 00:10)
+            now = datetime.now()
+            today = now.strftime('%Y-%m-%d')
+            hour = now.hour
+            minute = now.minute
+
+            if today != last_reset_date and hour == 0 and minute < 10:
+                print(f"=== DAILY RESET: {today} ===")
+
+                # Gửi tổng kết ngày cũ cho admin
+                try:
+                    summary = sheets.get_daily_summary()
+                    if summary:
+                        send_daily_summary(summary)
+                except Exception as e:
+                    print(f"Summary error: {e}")
+
+                # Xóa dữ liệu cũ
+                try:
+                    result = sheets.clear_old_data()
+                    print(f"Clear result: {result}")
+                except Exception as e:
+                    print(f"Clear error: {e}")
+
+                last_reset_date = today
+                print(f"=== RESET DONE ===")
+
+        except Exception as e:
+            print(f"Keep-alive/reset error: {e}")
+
+def send_daily_summary(summary):
+    """Gửi báo cáo tổng kết ngày qua Telegram"""
+    msg = (
+        f"📊 <b>BÁO CÁO CUỐI NGÀY</b>\n"
+        f"📅 <b>Ngày:</b> {summary['date']}\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"📋 Tổng đơn: <b>{summary['total']}</b>\n"
+        f"✅ Hoàn thành: <b>{summary['completed']}</b>\n"
+        f"✔️ Đã xác nhận: <b>{summary['confirmed']}</b>\n"
+        f"❌ Từ chối: <b>{summary['rejected']}</b>\n"
+        f"⏳ Chưa xử lý: <b>{summary['pending']}</b>\n"
+    )
+
+    if summary['customers']:
+        msg += "\n📋 <b>Chi tiết:</b>\n"
+        for c in summary['customers']:
+            msg += f"• {c['id']} | {c['name']} | {c['service']} | {c['time']} | {c['status']}\n"
+
+    msg += f"\n━━━━━━━━━━━━━━━\n🗑 <i>Dữ liệu sẽ được xóa để bắt đầu ngày mới.</i>"
+
+    telegram_bot.send_message(config.TELEGRAM_CHAT_ID, msg)
+
+# Chạy background thread
+bg_thread = threading.Thread(target=keep_alive_and_reset, daemon=True)
+bg_thread.start()
 
 
 # ===== TRANG CHỦ =====
@@ -42,7 +98,6 @@ def home():
 # ===== NHẬN BOOKING TỪ WEBSITE =====
 @app.route('/booking', methods=['POST', 'OPTIONS'])
 def handle_booking():
-    # Xử lý CORS preflight
     if request.method == 'OPTIONS':
         response = jsonify({'ok': True})
         response.headers.add('Access-Control-Allow-Origin', '*')
@@ -51,89 +106,68 @@ def handle_booking():
         return response
 
     try:
-        # Debug log
         print(f"=== NEW BOOKING REQUEST ===")
         print(f"Content-Type: {request.content_type}")
 
         raw_body = request.get_data(as_text=True)
         print(f"Raw body: {raw_body}")
 
-        # Parse dữ liệu - thử nhiều cách
+        # Parse dữ liệu
         data = None
 
-        # Cách 1: JSON
         try:
             data = request.get_json(force=True, silent=True)
             if data:
-                print(f"Parsed as JSON: {data}")
-        except Exception as e:
-            print(f"JSON parse failed: {e}")
+                print(f"Parsed JSON: {data}")
+        except:
+            pass
 
-        # Cách 2: Form data
         if not data or not isinstance(data, dict):
             try:
                 data = request.form.to_dict()
                 if data:
-                    print(f"Parsed as form: {data}")
-            except Exception as e:
-                print(f"Form parse failed: {e}")
+                    print(f"Parsed form: {data}")
+            except:
+                pass
 
-        # Cách 3: Parse raw body thủ công
         if not data or not isinstance(data, dict) or len(data) == 0:
             try:
                 data = json.loads(raw_body)
-                print(f"Parsed raw body: {data}")
-            except Exception as e:
-                print(f"Raw parse failed: {e}")
+                print(f"Parsed raw: {data}")
+            except:
+                pass
 
-        # Kiểm tra dữ liệu
         if not data or not isinstance(data, dict):
-            print("ERROR: No data received")
             return jsonify({'success': False, 'message': 'Không nhận được dữ liệu!'}), 400
 
-        # Log từng field
         fullname = data.get('fullname', '')
         phone = data.get('phone', '')
-        email = data.get('email', '')
         service = data.get('service', '')
-        date = data.get('date', '')
+        date_val = data.get('date', '')
         time_val = data.get('time', '')
-        note = data.get('note', '')
 
-        print(f"fullname: '{fullname}'")
-        print(f"phone: '{phone}'")
-        print(f"email: '{email}'")
-        print(f"service: '{service}'")
-        print(f"date: '{date}'")
-        print(f"time: '{time_val}'")
-        print(f"note: '{note}'")
+        print(f"fullname='{fullname}' phone='{phone}' service='{service}' date='{date_val}' time='{time_val}'")
 
-        # Validate
-        if not fullname or not phone or not service or not date or not time_val:
+        if not fullname or not phone or not service or not date_val or not time_val:
             missing = []
             if not fullname: missing.append('Họ tên')
             if not phone: missing.append('SĐT')
             if not service: missing.append('Dịch vụ')
-            if not date: missing.append('Ngày')
+            if not date_val: missing.append('Ngày')
             if not time_val: missing.append('Giờ')
-            msg = f"Thiếu thông tin: {', '.join(missing)}"
-            print(f"Validation failed: {msg}")
-            return jsonify({'success': False, 'message': msg}), 400
+            return jsonify({'success': False, 'message': f"Thiếu: {', '.join(missing)}"}), 400
 
         data['source'] = 'Website'
 
-        # Lưu vào Google Sheets
         booking_id, date_formatted = sheets.add_booking(data)
-        print(f"Saved to sheet: {booking_id}")
+        print(f"Saved: {booking_id}")
 
-        # Gửi thông báo Telegram
         try:
-            tg_result = telegram_bot.notify_new_booking(booking_id, data, date_formatted)
-            print(f"Telegram notify result: {tg_result}")
+            telegram_bot.notify_new_booking(booking_id, data, date_formatted)
+            print("Telegram notified")
         except Exception as e:
-            print(f"Telegram notify error: {e}")
+            print(f"Telegram error: {e}")
 
-        print(f"=== BOOKING SUCCESS: {booking_id} ===")
         return jsonify({
             'success': True,
             'message': 'Đặt lịch thành công!',
@@ -141,10 +175,9 @@ def handle_booking():
         })
 
     except Exception as e:
-        print(f"=== BOOKING ERROR ===")
-        print(f"Error: {e}")
+        print(f"Booking error: {e}")
         print(traceback.format_exc())
-        return jsonify({'success': False, 'message': 'Lỗi hệ thống, vui lòng thử lại!'}), 500
+        return jsonify({'success': False, 'message': 'Lỗi hệ thống!'}), 500
 
 
 # ===== TELEGRAM WEBHOOK =====
@@ -155,7 +188,7 @@ def handle_telegram():
         if not update:
             return jsonify({'ok': True})
 
-        print(f"Telegram update: {json.dumps(update, ensure_ascii=False)[:500]}")
+        print(f"Telegram: {json.dumps(update, ensure_ascii=False)[:500]}")
 
         if 'callback_query' in update:
             threading.Thread(target=telegram_bot.handle_callback, args=(update['callback_query'],)).start()
@@ -165,8 +198,7 @@ def handle_telegram():
         return jsonify({'ok': True})
 
     except Exception as e:
-        print(f"Telegram webhook error: {e}")
-        print(traceback.format_exc())
+        print(f"Telegram error: {e}")
         return jsonify({'ok': True})
 
 
@@ -174,15 +206,8 @@ def handle_telegram():
 @app.route('/zalo', methods=['POST'])
 def handle_zalo():
     try:
-        # Log header để debug
         secret = request.headers.get('X-Bot-Api-Secret-Token', '')
-        print(f"Zalo secret received: '{secret}'")
-        print(f"Zalo secret expected: '{config.ZALO_SECRET_TOKEN}'")
-
-        # Tạm tắt xác thực để debug
-        # if secret != config.ZALO_SECRET_TOKEN:
-        #     print(f"Zalo: Invalid secret token")
-        #     return jsonify({'ok': False}), 401
+        print(f"Zalo secret: '{secret}'")
 
         data = request.get_json(force=True, silent=True)
         print(f"Zalo update: {data}")
@@ -193,19 +218,16 @@ def handle_zalo():
         return jsonify({'ok': True})
 
     except Exception as e:
-        print(f"Zalo webhook error: {e}")
-        print(traceback.format_exc())
+        print(f"Zalo error: {e}")
         return jsonify({'ok': True})
 
 
-# ===== CÀI ĐẶT WEBHOOK =====
+# ===== SETUP WEBHOOKS =====
 @app.route('/setup', methods=['GET'])
 def setup_webhooks():
     base_url = config.RENDER_URL or request.host_url.rstrip('/')
-
     tg_result = telegram_bot.set_webhook(base_url)
     zalo_result = zalo_bot.set_webhook(base_url)
-
     return jsonify({
         'telegram_webhook': tg_result,
         'zalo_webhook': zalo_result,
@@ -213,7 +235,7 @@ def setup_webhooks():
     })
 
 
-# ===== DEBUG INFO =====
+# ===== DEBUG =====
 @app.route('/debug', methods=['GET'])
 def debug_info():
     try:
@@ -234,21 +256,16 @@ def debug_info():
 
     return jsonify({
         'server': 'running',
+        'last_reset_date': last_reset_date,
         'telegram_webhook': tg_info,
         'zalo_webhook': zalo_info,
-        'zalo_sessions': len(zalo_bot.user_sessions),
-        'config': {
-            'RENDER_URL': config.RENDER_URL,
-            'TELEGRAM_CHAT_ID': config.TELEGRAM_CHAT_ID,
-            'SHEET_ID': config.SHEET_ID
-        }
+        'zalo_sessions': len(zalo_bot.user_sessions)
     })
 
 
-# ===== TEST BOOKING (GET - dùng trình duyệt) =====
+# ===== TEST BOOKING =====
 @app.route('/test-booking', methods=['GET'])
 def test_booking():
-    """Test thử tạo booking bằng trình duyệt"""
     try:
         test_data = {
             'fullname': 'Test User',
@@ -260,24 +277,34 @@ def test_booking():
             'note': 'Test từ trình duyệt',
             'source': 'Test'
         }
-
         booking_id, date_formatted = sheets.add_booking(test_data)
         tg_result = telegram_bot.notify_new_booking(booking_id, test_data, date_formatted)
-
         return jsonify({
             'success': True,
             'booking_id': booking_id,
-            'date_formatted': date_formatted,
-            'telegram_result': tg_result,
-            'message': 'Test booking created! Check Google Sheet and Telegram.'
+            'telegram_result': tg_result
         })
-
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'traceback': traceback.format_exc()})
+
+
+# ===== XÓA DỮ LIỆU THỦ CÔNG =====
+@app.route('/reset', methods=['GET'])
+def manual_reset():
+    """Admin có thể truy cập để xóa dữ liệu thủ công"""
+    try:
+        summary = sheets.get_daily_summary()
+        if summary:
+            send_daily_summary(summary)
+
+        result = sheets.clear_old_data()
         return jsonify({
-            'success': False,
-            'error': str(e),
-            'traceback': traceback.format_exc()
+            'success': True,
+            'result': result,
+            'message': 'Đã gửi tổng kết và xóa dữ liệu!'
         })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 if __name__ == '__main__':
