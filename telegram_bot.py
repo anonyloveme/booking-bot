@@ -10,7 +10,8 @@ ADMIN_KEYBOARD = {
     'keyboard': [
         [{'text': '📅 Hôm nay'}, {'text': '📅 Ngày mai'}],
         [{'text': '✔️ Xác nhận đơn'}, {'text': '✂️ Hoàn thành đơn'}],
-        [{'text': '❌ Từ chối đơn'}, {'text': '📊 Thống kê'}]
+        [{'text': '❌ Từ chối đơn'}, {'text': '📊 Thống kê'}],
+        [{'text': '✅ Xác nhận tất cả'}, {'text': '🏁 Hoàn thành tất cả'}]
     ],
     'resize_keyboard': True,
     'is_persistent': True
@@ -163,6 +164,56 @@ def show_pending_for_action(chat_id, action):
     send_message_inline(chat_id, msg, keyboard)
 
 
+def confirm_all_today(chat_id):
+    """Xác nhận tất cả đơn đang chờ"""
+    bookings = sheets.get_bookings_by_status('Chờ')
+    if not bookings:
+        send_message(chat_id, "✅ Không có đơn chờ xác nhận!")
+        return
+
+    confirmed = []
+    for b in bookings:
+        bid = b[0] if len(b) > 0 else ''
+        name = b[1] if len(b) > 1 else ''
+        if bid:
+            result = sheets.update_status(bid, '✅ Đã xác nhận')
+            if result:
+                confirmed.append(f"{bid} — {name}")
+
+    if confirmed:
+        msg = f"✅ <b>ĐÃ XÁC NHẬN {len(confirmed)} ĐƠN</b>\n━━━━━━━━━━━━━━━\n\n"
+        for c in confirmed:
+            msg += f"• {c}\n"
+        send_message(chat_id, msg)
+    else:
+        send_message(chat_id, "⚠️ Không xác nhận được đơn nào.")
+
+
+def complete_all_today(chat_id):
+    """Hoàn thành tất cả đơn đã xác nhận"""
+    bookings = sheets.get_bookings_by_status('Đã xác nhận')
+    if not bookings:
+        send_message(chat_id, "Không có đơn đã xác nhận để hoàn thành.")
+        return
+
+    completed = []
+    for b in bookings:
+        bid = b[0] if len(b) > 0 else ''
+        name = b[1] if len(b) > 1 else ''
+        if bid:
+            result = sheets.update_status(bid, '✅ Đã hoàn thành')
+            if result:
+                completed.append(f"{bid} — {name}")
+
+    if completed:
+        msg = f"🏁 <b>ĐÃ HOÀN THÀNH {len(completed)} ĐƠN</b>\n━━━━━━━━━━━━━━━\n\n"
+        for c in completed:
+            msg += f"• {c}\n"
+        send_message(chat_id, msg)
+    else:
+        send_message(chat_id, "⚠️ Không hoàn thành được đơn nào.")
+
+
 def handle_callback(callback):
     data = callback.get('data', '')
     chat_id = callback['message']['chat']['id']
@@ -173,11 +224,9 @@ def handle_callback(callback):
     if data.startswith('confirm_'):
         bid = data.replace('confirm_', '')
         row = sheets.update_status(bid, '✅ Đã xác nhận')
-
         if row is None:
-            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đang chờ!')
+            answer_callback(callback['id'], f'⚠️ {bid} không tìm thấy hoặc đã xử lý!')
             return
-
         answer_callback(callback['id'], f'✅ {bid} đã xác nhận!')
         new_text = original_text + f"\n\n✅ ĐÃ XÁC NHẬN — {now_str}"
         keyboard = {
@@ -187,33 +236,43 @@ def handle_callback(callback):
             ]
         }
         edit_message(chat_id, message_id, new_text, keyboard)
-        send_message(chat_id, f"✅ Đã xác nhận <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
+        send_message(chat_id, f"✅ Xác nhận <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
 
     elif data.startswith('reject_'):
         bid = data.replace('reject_', '')
         row = sheets.update_status(bid, '❌ Đã từ chối')
-
         if row is None:
-            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đang chờ!')
+            answer_callback(callback['id'], f'⚠️ {bid} không tìm thấy!')
             return
-
         answer_callback(callback['id'], f'❌ {bid} đã từ chối!')
         new_text = original_text + f"\n\n❌ ĐÃ TỪ CHỐI — {now_str}"
         edit_message(chat_id, message_id, new_text)
-        send_message(chat_id, f"❌ Đã từ chối <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
+        send_message(chat_id, f"❌ Từ chối <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
 
     elif data.startswith('complete_'):
         bid = data.replace('complete_', '')
         row = sheets.update_status(bid, '✅ Đã hoàn thành')
-
         if row is None:
-            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đã xác nhận!')
+            answer_callback(callback['id'], f'⚠️ {bid} không tìm thấy!')
             return
-
         answer_callback(callback['id'], f'✅ {bid} hoàn thành!')
         new_text = original_text + f"\n\n✅ ĐÃ HOÀN THÀNH — {now_str}"
         edit_message(chat_id, message_id, new_text)
         send_message(chat_id, f"✂️ <b>{bid}</b> — {row[1] if len(row) > 1 else ''} hoàn thành!")
+
+    elif data == 'confirm_all_yes':
+        answer_callback(callback['id'], '✅ Đang xác nhận...')
+        edit_message(chat_id, message_id, "⏳ Đang xác nhận tất cả...")
+        confirm_all_today(chat_id)
+
+    elif data == 'complete_all_yes':
+        answer_callback(callback['id'], '✂️ Đang hoàn thành...')
+        edit_message(chat_id, message_id, "⏳ Đang hoàn thành tất cả...")
+        complete_all_today(chat_id)
+
+    elif data == 'cancel_action':
+        answer_callback(callback['id'], 'Đã hủy')
+        edit_message(chat_id, message_id, "❌ Đã hủy thao tác.")
 
 
 def handle_command(message):
@@ -225,10 +284,12 @@ def handle_command(message):
         send_message(chat_id,
             "🏠 <b>BarberShop Manager</b>\n\n"
             "📅 <b>Hôm nay / Ngày mai</b> — Xem lịch\n"
-            "✔️ <b>Xác nhận đơn</b> — Duyệt đơn mới\n"
-            "✂️ <b>Hoàn thành đơn</b> — Đánh dấu xong\n"
-            "❌ <b>Từ chối đơn</b> — Từ chối đơn\n"
+            "✔️ <b>Xác nhận đơn</b> — Chọn đơn duyệt\n"
+            "✂️ <b>Hoàn thành đơn</b> — Chọn đơn xong\n"
+            "❌ <b>Từ chối đơn</b> — Chọn đơn từ chối\n"
             "📊 <b>Thống kê</b> — Tổng quan\n\n"
+            "✅ <b>Xác nhận tất cả</b> — Duyệt hết đơn chờ\n"
+            "🏁 <b>Hoàn thành tất cả</b> — Xong hết đơn\n\n"
             "🔍 Tìm: /find [SĐT hoặc tên]"
         )
 
@@ -290,6 +351,43 @@ def handle_command(message):
 
     elif text == '❌ Từ chối đơn':
         show_pending_for_action(chat_id, 'reject')
+
+    elif text == '✅ Xác nhận tất cả':
+        # Hỏi xác nhận trước
+        bookings = sheets.get_bookings_by_status('Chờ')
+        if not bookings:
+            send_message(chat_id, "✅ Không có đơn chờ!")
+            return
+        msg = f"⚠️ Xác nhận <b>tất cả {len(bookings)} đơn</b> đang chờ?\n\n"
+        for b in bookings:
+            msg += f"• {b[0]} — {b[1]} | {b[5]} {b[6]}\n"
+        keyboard = {
+            'inline_keyboard': [
+                [
+                    {'text': f'✅ Xác nhận {len(bookings)} đơn', 'callback_data': 'confirm_all_yes'},
+                    {'text': '❌ Hủy', 'callback_data': 'cancel_action'}
+                ]
+            ]
+        }
+        send_message_inline(chat_id, msg, keyboard)
+
+    elif text == '🏁 Hoàn thành tất cả':
+        bookings = sheets.get_bookings_by_status('Đã xác nhận')
+        if not bookings:
+            send_message(chat_id, "Không có đơn đã xác nhận để hoàn thành.")
+            return
+        msg = f"⚠️ Hoàn thành <b>tất cả {len(bookings)} đơn</b> đã xác nhận?\n\n"
+        for b in bookings:
+            msg += f"• {b[0]} — {b[1]} | {b[5]} {b[6]}\n"
+        keyboard = {
+            'inline_keyboard': [
+                [
+                    {'text': f'🏁 Hoàn thành {len(bookings)} đơn', 'callback_data': 'complete_all_yes'},
+                    {'text': '❌ Hủy', 'callback_data': 'cancel_action'}
+                ]
+            ]
+        }
+        send_message_inline(chat_id, msg, keyboard)
 
     else:
         send_message(chat_id, "Bấm nút bên dưới hoặc gõ /help")
