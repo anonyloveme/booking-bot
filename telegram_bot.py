@@ -10,7 +10,7 @@ ADMIN_KEYBOARD = {
     'keyboard': [
         [{'text': '📅 Hôm nay'}, {'text': '📅 Ngày mai'}],
         [{'text': '✔️ Xác nhận đơn'}, {'text': '✂️ Hoàn thành đơn'}],
-        [{'text': '📊 Thống kê'}, {'text': '❓ Trợ giúp'}]
+        [{'text': '❌ Từ chối đơn'}, {'text': '📊 Thống kê'}]
     ],
     'resize_keyboard': True,
     'is_persistent': True
@@ -128,6 +128,12 @@ def show_pending_for_action(chat_id, action):
         empty_msg = "Không có đơn cần hoàn thành."
         prefix = 'complete_'
         btn_icon = '✂️'
+    elif action == 'reject':
+        bookings = sheets.get_bookings_by_status('Chờ')
+        title = "❌ <b>CHỌN ĐƠN TỪ CHỐI</b>"
+        empty_msg = "Không có đơn chờ xử lý."
+        prefix = 'reject_'
+        btn_icon = '❌'
     else:
         return
 
@@ -162,45 +168,52 @@ def handle_callback(callback):
     chat_id = callback['message']['chat']['id']
     message_id = callback['message']['message_id']
     original_text = callback['message'].get('text', '')
+    now_str = datetime.now().strftime('%H:%M %d/%m/%Y')
 
     if data.startswith('confirm_'):
         bid = data.replace('confirm_', '')
         row = sheets.update_status(bid, '✅ Đã xác nhận')
-        answer_callback(callback['id'], f'✅ {bid} đã xác nhận!')
 
-        new_text = original_text + f"\n\n✅ ĐÃ XÁC NHẬN - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
+        if row is None:
+            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đang chờ!')
+            return
+
+        answer_callback(callback['id'], f'✅ {bid} đã xác nhận!')
+        new_text = original_text + f"\n\n✅ ĐÃ XÁC NHẬN — {now_str}"
         keyboard = {
             'inline_keyboard': [
                 [{'text': '✂️ Hoàn thành', 'callback_data': f'complete_{bid}'}],
-                [{'text': '📞 Gọi khách', 'url': f"tel:{row[2] if row and len(row) > 2 else ''}"}]
+                [{'text': '📞 Gọi khách', 'url': f"tel:{row[2] if len(row) > 2 else ''}"}]
             ]
         }
         edit_message(chat_id, message_id, new_text, keyboard)
-
-        name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"✅ Đã xác nhận <b>{bid}</b> — {name}")
+        send_message(chat_id, f"✅ Đã xác nhận <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
 
     elif data.startswith('reject_'):
         bid = data.replace('reject_', '')
         row = sheets.update_status(bid, '❌ Đã từ chối')
+
+        if row is None:
+            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đang chờ!')
+            return
+
         answer_callback(callback['id'], f'❌ {bid} đã từ chối!')
-
-        new_text = original_text + f"\n\n❌ ĐÃ TỪ CHỐI - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
+        new_text = original_text + f"\n\n❌ ĐÃ TỪ CHỐI — {now_str}"
         edit_message(chat_id, message_id, new_text)
-
-        name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"❌ Đã từ chối <b>{bid}</b> — {name}")
+        send_message(chat_id, f"❌ Đã từ chối <b>{bid}</b> — {row[1] if len(row) > 1 else ''}")
 
     elif data.startswith('complete_'):
         bid = data.replace('complete_', '')
         row = sheets.update_status(bid, '✅ Đã hoàn thành')
+
+        if row is None:
+            answer_callback(callback['id'], f'⚠️ Không tìm thấy đơn {bid} đã xác nhận!')
+            return
+
         answer_callback(callback['id'], f'✅ {bid} hoàn thành!')
-
-        new_text = original_text + f"\n\n✅ ĐÃ HOÀN THÀNH - {datetime.now().strftime('%H:%M %d/%m/%Y')}"
+        new_text = original_text + f"\n\n✅ ĐÃ HOÀN THÀNH — {now_str}"
         edit_message(chat_id, message_id, new_text)
-
-        name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"✂️ <b>{bid}</b> — {name} hoàn thành!")
+        send_message(chat_id, f"✂️ <b>{bid}</b> — {row[1] if len(row) > 1 else ''} hoàn thành!")
 
 
 def handle_command(message):
@@ -214,6 +227,7 @@ def handle_command(message):
             "📅 <b>Hôm nay / Ngày mai</b> — Xem lịch\n"
             "✔️ <b>Xác nhận đơn</b> — Duyệt đơn mới\n"
             "✂️ <b>Hoàn thành đơn</b> — Đánh dấu xong\n"
+            "❌ <b>Từ chối đơn</b> — Từ chối đơn\n"
             "📊 <b>Thống kê</b> — Tổng quan\n\n"
             "🔍 Tìm: /find [SĐT hoặc tên]"
         )
@@ -273,6 +287,9 @@ def handle_command(message):
 
     elif text == '✂️ Hoàn thành đơn':
         show_pending_for_action(chat_id, 'complete')
+
+    elif text == '❌ Từ chối đơn':
+        show_pending_for_action(chat_id, 'reject')
 
     else:
         send_message(chat_id, "Bấm nút bên dưới hoặc gõ /help")
