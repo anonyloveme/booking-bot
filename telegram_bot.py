@@ -9,10 +9,8 @@ API = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}"
 ADMIN_KEYBOARD = {
     'keyboard': [
         [{'text': '📅 Hôm nay'}, {'text': '📅 Ngày mai'}],
-        [{'text': '⏳ Chờ xác nhận'}, {'text': '✅ Hoàn thành'}],
-        [{'text': '📊 Thống kê'}, {'text': '❓ Hướng dẫn'}],
         [{'text': '✔️ Xác nhận đơn'}, {'text': '✂️ Hoàn thành đơn'}],
-        [{'text': '❌ Từ chối đơn'}]
+        [{'text': '📊 Thống kê'}, {'text': '❓ Trợ giúp'}]
     ],
     'resize_keyboard': True,
     'is_persistent': True
@@ -71,10 +69,9 @@ def set_bot_commands():
         {'command': 'start', 'description': '🏠 Bắt đầu'},
         {'command': 'today', 'description': '📅 Lịch hôm nay'},
         {'command': 'tomorrow', 'description': '📅 Lịch ngày mai'},
-        {'command': 'all', 'description': '⏳ Đơn chờ xác nhận'},
-        {'command': 'done', 'description': '✅ Đơn hoàn thành'},
+        {'command': 'find', 'description': '🔍 Tìm đơn'},
         {'command': 'stats', 'description': '📊 Thống kê'},
-        {'command': 'help', 'description': '❓ Hướng dẫn'}
+        {'command': 'help', 'description': '❓ Trợ giúp'}
     ]
     try:
         requests.post(f"{API}/setMyCommands", json={'commands': commands}, timeout=10)
@@ -119,25 +116,18 @@ def notify_new_booking(booking_id, data, date_formatted):
 
 
 def show_pending_for_action(chat_id, action):
-    """Hiện danh sách đơn với nút chọn theo hành động"""
     if action == 'confirm':
         bookings = sheets.get_bookings_by_status('Chờ')
-        title = "✔️ <b>CHỌN ĐƠN ĐỂ XÁC NHẬN</b>"
-        empty_msg = "✅ Không có đơn nào chờ xác nhận!"
+        title = "✔️ <b>CHỌN ĐƠN XÁC NHẬN</b>"
+        empty_msg = "✅ Không có đơn chờ!"
         prefix = 'confirm_'
         btn_icon = '✅'
     elif action == 'complete':
         bookings = sheets.get_bookings_by_status('Đã xác nhận')
-        title = "✂️ <b>CHỌN ĐƠN ĐỂ HOÀN THÀNH</b>"
-        empty_msg = "Không có đơn đã xác nhận nào."
+        title = "✂️ <b>CHỌN ĐƠN HOÀN THÀNH</b>"
+        empty_msg = "Không có đơn cần hoàn thành."
         prefix = 'complete_'
         btn_icon = '✂️'
-    elif action == 'reject':
-        bookings = sheets.get_bookings_by_status('Chờ')
-        title = "❌ <b>CHỌN ĐƠN ĐỂ TỪ CHỐI</b>"
-        empty_msg = "Không có đơn nào chờ xử lý."
-        prefix = 'reject_'
-        btn_icon = '❌'
     else:
         return
 
@@ -149,21 +139,19 @@ def show_pending_for_action(chat_id, action):
     buttons = []
 
     for b in bookings:
-        bid = b[0]
+        bid = b[0] if len(b) > 0 else '?'
         name = b[1] if len(b) > 1 else '?'
         phone = b[2] if len(b) > 2 else ''
         service = b[4] if len(b) > 4 else ''
+        date_val = b[5] if len(b) > 5 else ''
         time_val = b[6] if len(b) > 6 else ''
-        status = b[8] if len(b) > 8 else ''
 
-        msg += f"🆔 <b>{bid}</b> | {name} ({phone})\n🕐 {time_val} | 💈 {service} | {status}\n\n"
+        msg += f"🆔 <b>{bid}</b> | {name} ({phone})\n📅 {date_val} 🕐 {time_val} | 💈 {service}\n\n"
 
         buttons.append([{
-            'text': f'{btn_icon} {bid} — {name} ({time_val})',
+            'text': f'{btn_icon} {bid} — {name} | {date_val} {time_val}',
             'callback_data': f'{prefix}{bid}'
         }])
-
-    buttons.append([{'text': '🔙 Quay lại', 'callback_data': 'back_menu'}])
 
     keyboard = {'inline_keyboard': buttons}
     send_message_inline(chat_id, msg, keyboard)
@@ -174,11 +162,6 @@ def handle_callback(callback):
     chat_id = callback['message']['chat']['id']
     message_id = callback['message']['message_id']
     original_text = callback['message'].get('text', '')
-
-    if data == 'back_menu':
-        answer_callback(callback['id'])
-        send_message(chat_id, "🏠 Bấm nút bên dưới để tiếp tục.")
-        return
 
     if data.startswith('confirm_'):
         bid = data.replace('confirm_', '')
@@ -194,9 +177,8 @@ def handle_callback(callback):
         }
         edit_message(chat_id, message_id, new_text, keyboard)
 
-        # Thông báo riêng
         name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"✅ Đã xác nhận đơn <b>{bid}</b> — {name}")
+        send_message(chat_id, f"✅ Đã xác nhận <b>{bid}</b> — {name}")
 
     elif data.startswith('reject_'):
         bid = data.replace('reject_', '')
@@ -207,7 +189,7 @@ def handle_callback(callback):
         edit_message(chat_id, message_id, new_text)
 
         name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"❌ Đã từ chối đơn <b>{bid}</b> — {name}")
+        send_message(chat_id, f"❌ Đã từ chối <b>{bid}</b> — {name}")
 
     elif data.startswith('complete_'):
         bid = data.replace('complete_', '')
@@ -218,26 +200,22 @@ def handle_callback(callback):
         edit_message(chat_id, message_id, new_text)
 
         name = row[1] if row and len(row) > 1 else ''
-        send_message(chat_id, f"✂️ Đơn <b>{bid}</b> — {name} đã hoàn thành!")
+        send_message(chat_id, f"✂️ <b>{bid}</b> — {name} hoàn thành!")
 
 
 def handle_command(message):
     chat_id = message['chat']['id']
     text = message.get('text', '').strip()
 
-    if text in ['/start', '/help', '❓ Hướng dẫn']:
+    if text in ['/start', '/help', '❓ Trợ giúp']:
         set_bot_commands()
         send_message(chat_id,
             "🏠 <b>BarberShop Manager</b>\n\n"
-            "Bấm nút bên dưới để quản lý:\n\n"
             "📅 <b>Hôm nay / Ngày mai</b> — Xem lịch\n"
-            "⏳ <b>Chờ xác nhận</b> — Đơn chờ\n"
-            "✅ <b>Hoàn thành</b> — Đơn xong\n"
+            "✔️ <b>Xác nhận đơn</b> — Duyệt đơn mới\n"
+            "✂️ <b>Hoàn thành đơn</b> — Đánh dấu xong\n"
             "📊 <b>Thống kê</b> — Tổng quan\n\n"
-            "✔️ <b>Xác nhận đơn</b> — Chọn đơn để xác nhận\n"
-            "✂️ <b>Hoàn thành đơn</b> — Chọn đơn đã xong\n"
-            "❌ <b>Từ chối đơn</b> — Chọn đơn để từ chối\n\n"
-            "🔍 Tìm kiếm: /find 0901234567"
+            "🔍 Tìm: /find [SĐT hoặc tên]"
         )
 
     elif text in ['/today', '📅 Hôm nay']:
@@ -261,28 +239,6 @@ def handle_command(message):
         msg = f"📅 <b>Ngày mai ({tmr})</b>\n━━━━━━━━━━━━━━━\n\n"
         for b in bookings:
             msg += f"🆔 {b[0]} | 🕐 {b[6]} | {b[1]} ({b[2]})\n💈 {b[4]} | {b[8]}\n\n"
-        msg += f"📊 Tổng: <b>{len(bookings)}</b>"
-        send_message(chat_id, msg)
-
-    elif text in ['/all', '⏳ Chờ xác nhận']:
-        bookings = sheets.get_bookings_by_status('Chờ')
-        if not bookings:
-            send_message(chat_id, "✅ Không có đơn chờ xác nhận!")
-            return
-        msg = "⏳ <b>Đơn chờ xác nhận</b>\n━━━━━━━━━━━━━━━\n\n"
-        for b in bookings:
-            msg += f"🆔 {b[0]} | {b[1]} ({b[2]})\n📅 {b[5]} 🕐 {b[6]} | 💈 {b[4]}\n\n"
-        msg += f"📊 Tổng: <b>{len(bookings)}</b>"
-        send_message(chat_id, msg)
-
-    elif text in ['/done', '✅ Hoàn thành']:
-        bookings = sheets.get_bookings_by_status('hoàn thành')
-        if not bookings:
-            send_message(chat_id, "Chưa có đơn hoàn thành.")
-            return
-        msg = "✅ <b>Đơn hoàn thành</b>\n━━━━━━━━━━━━━━━\n\n"
-        for b in bookings:
-            msg += f"🆔 {b[0]} | {b[1]} ({b[2]})\n📅 {b[5]} 🕐 {b[6]} | 💈 {b[4]}\n\n"
         msg += f"📊 Tổng: <b>{len(bookings)}</b>"
         send_message(chat_id, msg)
 
@@ -312,15 +268,11 @@ def handle_command(message):
             f"❌ Từ chối: <b>{s['rejected']}</b>"
         )
 
-    # ===== NÚT HÀNH ĐỘNG =====
     elif text == '✔️ Xác nhận đơn':
         show_pending_for_action(chat_id, 'confirm')
 
     elif text == '✂️ Hoàn thành đơn':
         show_pending_for_action(chat_id, 'complete')
-
-    elif text == '❌ Từ chối đơn':
-        show_pending_for_action(chat_id, 'reject')
 
     else:
         send_message(chat_id, "Bấm nút bên dưới hoặc gõ /help")
