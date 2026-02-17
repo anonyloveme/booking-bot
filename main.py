@@ -1,246 +1,241 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import config
-import sheets
-import telegram_bot
-import zalo_bot
-import threading
-import time
-import json
-import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+import threading, time, os, json, traceback
 import requests as http_requests
+import config, sheets, telegram_bot
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
-last_reset_date = datetime.now().strftime('%Y-%m-%d')
+VN_TZ = timezone(timedelta(hours=7))
 
+def vn_now():
+    return datetime.now(VN_TZ)
 
+# ===== KEEP-ALIVE & DAILY RESET =====
 def keep_alive_and_reset():
-    global last_reset_date
+    last_reset = ''
     while True:
-        time.sleep(300)
+        time.sleep(300)  # 5 phút
         try:
             url = config.RENDER_URL or 'https://booking-bot-df6q.onrender.com'
             http_requests.get(url, timeout=10)
-
-            now = datetime.now()
-            today = now.strftime('%Y-%m-%d')
-            if today != last_reset_date and now.hour == 0 and now.minute < 10:
-                print("=== DAILY RESET ===")
-                try:
-                    summary = sheets.get_daily_summary()
-                    if summary:
-                        msg = (
-                            f"📊 <b>BÁO CÁO CUỐI NGÀY</b>\n"
-                            f"📅 {summary['date']}\n━━━━━━━━━━━━━━━\n\n"
-                            f"📋 Tổng: <b>{summary['total']}</b>\n"
-                            f"✅ Hoàn thành: <b>{summary['completed']}</b>\n"
-                            f"✔️ Xác nhận: <b>{summary['confirmed']}</b>\n"
-                            f"❌ Từ chối: <b>{summary['rejected']}</b>\n"
-                            f"⏳ Chưa xử lý: <b>{summary['pending']}</b>\n"
-                        )
-                        for c in summary['customers']:
-                            msg += f"\n• {c['id']} | {c['name']} | {c['service']} | {c['status']}"
-                        msg += "\n\n🗑 <i>Dữ liệu đã xóa, bắt đầu ngày mới.</i>"
-                        telegram_bot.send_message(config.TELEGRAM_CHAT_ID, msg)
-                except Exception as e:
-                    print(f"Summary error: {e}")
-
-                sheets.clear_old_data()
-                last_reset_date = today
-                print("=== RESET DONE ===")
+            print(f"Keep-alive OK at {vn_now().strftime('%H:%M %d/%m/%Y')} VN")
         except Exception as e:
-            print(f"BG error: {e}")
+            print(f"Keep-alive error: {e}")
 
+        now = vn_now()
+        today_str = now.strftime('%Y-%m-%d')
+        hour = now.hour
+        minute = now.minute
+
+        # Reset lúc 00:00-00:10 giờ VN
+        if hour == 0 and minute < 10 and last_reset != today_str:
+            last_reset = today_str
+            print(f"=== DAILY RESET at {now.strftime('%H:%M %d/%m/%Y')} VN ===")
+            try:
+                send_daily_summary()
+            except Exception as e:
+                print(f"Summary error: {e}")
+            try:
+                result = sheets.clear_old_data()
+                print(f"Clear result: {result}")
+            except Exception as e:
+                print(f"Clear error: {e}")
 
 threading.Thread(target=keep_alive_and_reset, daemon=True).start()
 
+def send_daily_summary():
+    summary = sheets.get_daily_summary()
+    if not summary:
+        telegram_bot.send_message(
+            config.TELEGRAM_CHAT_ID,
+            f"📋 <b>BÁO CÁO CUỐI NGÀY</b>\n📅 {sheets.get_today_str()}\n\nKhông có đơn hôm nay."
+        )
+        return
+    msg = (
+        f"📋 <b>BÁO CÁO CUỐI NGÀY</b>\n"
+        f"📅 {summary['date']}\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"📊 Tổng: <b>{summary['total']}</b>\n"
+        f"✅ Hoàn thành: <b>{summary['completed']}</b>\n"
+        f"✔️ Xác nhận: <b>{summary['confirmed']}</b>\n"
+        f"⏳ Chờ: <b>{summary['pending']}</b>\n"
+        f"❌ Từ chối: <b>{summary['rejected']}</b>\n\n"
+    )
+    for c in summary['customers']:
+        msg += f"🆔 {c['id']} | {c['name']} | 🕐 {c['time']} | {c['status']}\n"
+    msg += f"\n━━━━━━━━━━━━━━━\n⏰ {vn_now().strftime('%H:%M %d/%m/%Y')} (VN)"
+    telegram_bot.send_message(config.TELEGRAM_CHAT_ID, msg)
 
-@app.route('/', methods=['GET'])
+# ===== ROUTES =====
+@app.route('/')
 def home():
-    return jsonify({'status': 'running', 'service': 'BarberShop Booking Bot'})
-
+    return jsonify({
+        'service': 'BarberShop Booking Bot',
+        'status': 'running',
+        'endpoints': ['/booking', '/telegram', '/zalo', '/setup', '/debug'],
+        'server_time_vn': vn_now().strftime('%H:%M:%S %d/%m/%Y'),
+        'timezone': 'UTC+7 (Vietnam/Hanoi)'
+    })
 
 @app.route('/booking', methods=['POST', 'OPTIONS'])
 def handle_booking():
     if request.method == 'OPTIONS':
-        r = jsonify({'ok': True})
-        r.headers['Access-Control-Allow-Origin'] = '*'
-        r.headers['Access-Control-Allow-Headers'] = 'Content-Type,Accept'
-        r.headers['Access-Control-Allow-Methods'] = 'POST,OPTIONS'
-        return r
+        return jsonify({'ok': True})
     try:
-        print("=== NEW BOOKING ===")
+        print(f"=== BOOKING REQUEST at {vn_now().strftime('%H:%M:%S %d/%m/%Y')} VN ===")
+        print(f"Content-Type: {request.content_type}")
         raw = request.get_data(as_text=True)
-        print(f"Raw: {raw}")
+        print(f"Raw data: {raw}")
 
         data = None
         try:
-            data = request.get_json(force=True, silent=True)
+            data = request.get_json(force=True)
         except:
             pass
-        if not data or not isinstance(data, dict):
-            try:
-                data = request.form.to_dict()
-            except:
-                pass
-        if not data or not isinstance(data, dict) or len(data) == 0:
+        if not data:
+            data = request.form.to_dict()
+        if not data:
             try:
                 data = json.loads(raw)
             except:
                 pass
-        if not data or not isinstance(data, dict):
-            return jsonify({'success': False, 'message': 'Không nhận được dữ liệu!'}), 400
+        if not data:
+            return jsonify({'success': False, 'message': 'Dữ liệu trống!'}), 400
 
-        fullname = data.get('fullname', '')
-        phone = data.get('phone', '')
-        service = data.get('service', '')
-        date_val = data.get('date', '')
-        time_val = data.get('time', '')
+        print(f"Parsed data: {data}")
 
-        if not fullname or not phone or not service or not date_val or not time_val:
-            missing = []
-            if not fullname: missing.append('Họ tên')
-            if not phone: missing.append('SĐT')
-            if not service: missing.append('Dịch vụ')
-            if not date_val: missing.append('Ngày')
-            if not time_val: missing.append('Giờ')
-            return jsonify({'success': False, 'message': f"Thiếu: {', '.join(missing)}"}), 400
-
-        data['source'] = 'Website'
-
-        # Lưu Sheet
-        booking_id = None
-        date_formatted = None
+        booking_id = 'ERR'
+        date_formatted = ''
         try:
             booking_id, date_formatted = sheets.add_booking(data)
-            print(f"Saved: {booking_id}")
+            print(f"Sheet OK: {booking_id}")
         except Exception as e:
-            print(f"Sheet error: {e}")
-            print(traceback.format_exc())
+            print(f"Sheet ERROR: {e}")
+            traceback.print_exc()
 
-        # Gửi Telegram (luôn gửi dù Sheet lỗi)
         try:
-            if booking_id:
-                tg_result = telegram_bot.notify_new_booking(booking_id, data, date_formatted)
-            else:
-                # Sheet lỗi nhưng vẫn thông báo Telegram
-                booking_id = 'ERR'
-                date_parts = date_val.split('-')
-                if len(date_parts) == 3:
-                    date_formatted = f"{date_parts[2]}/{date_parts[1]}/{date_parts[0]}"
-                else:
-                    date_formatted = date_val
-                tg_result = telegram_bot.notify_new_booking(booking_id, data, date_formatted)
-            print(f"Telegram: OK")
+            data['source'] = data.get('source', 'Website')
+            tg_result = telegram_bot.notify_new_booking(booking_id, data, date_formatted)
+            print(f"Telegram notify: {tg_result}")
         except Exception as e:
-            print(f"Telegram error: {e}")
-            print(traceback.format_exc())
+            print(f"Telegram ERROR: {e}")
+            traceback.print_exc()
 
-        if booking_id and booking_id != 'ERR':
-            return jsonify({'success': True, 'message': 'Đặt lịch thành công!', 'booking_id': booking_id})
-        else:
-            return jsonify({'success': False, 'message': 'Lỗi lưu dữ liệu, nhưng đã thông báo cho shop!'}), 500
+        if booking_id == 'ERR':
+            return jsonify({'success': False, 'message': 'Lỗi lưu dữ liệu!'}), 500
 
+        return jsonify({
+            'success': True,
+            'message': 'Đặt lịch thành công!',
+            'booking_id': booking_id
+        })
     except Exception as e:
         print(f"Booking error: {e}")
-        print(traceback.format_exc())
+        traceback.print_exc()
         return jsonify({'success': False, 'message': 'Lỗi hệ thống!'}), 500
-
 
 @app.route('/telegram', methods=['POST'])
 def handle_telegram():
     try:
-        update = request.get_json(force=True, silent=True)
-        if not update:
-            return jsonify({'ok': True})
-
+        update = request.get_json()
+        print(f"Telegram update at {vn_now().strftime('%H:%M:%S')} VN: {json.dumps(update, ensure_ascii=False)[:500]}")
         if 'callback_query' in update:
-            threading.Thread(target=telegram_bot.handle_callback, args=(update['callback_query'],)).start()
-        elif 'message' in update and 'text' in update.get('message', {}):
-            threading.Thread(target=telegram_bot.handle_command, args=(update['message'],)).start()
-
-        return jsonify({'ok': True})
+            telegram_bot.handle_callback(update['callback_query'])
+        elif 'message' in update and 'text' in update['message']:
+            telegram_bot.handle_command(update['message'])
     except Exception as e:
         print(f"Telegram error: {e}")
-        return jsonify({'ok': True})
-
+        traceback.print_exc()
+    return jsonify({'ok': True})
 
 @app.route('/zalo', methods=['POST'])
 def handle_zalo():
     try:
-        data = request.get_json(force=True, silent=True)
-        if data:
-            threading.Thread(target=zalo_bot.handle_zalo_update, args=(data,)).start()
-        return jsonify({'ok': True})
+        import zalo_bot
+        data = request.get_json()
+        print(f"Zalo update at {vn_now().strftime('%H:%M:%S')} VN: {json.dumps(data, ensure_ascii=False)[:500]}")
+        secret = request.headers.get('X-ZaloOA-Secret', '')
+        if secret != config.ZALO_SECRET_TOKEN:
+            print(f"Zalo: Invalid secret token")
+            return jsonify({'error': 'invalid token'}), 403
+        threading.Thread(target=zalo_bot.handle_zalo_update, args=(data,)).start()
     except Exception as e:
         print(f"Zalo error: {e}")
-        return jsonify({'ok': True})
+    return jsonify({'ok': True})
 
-
-@app.route('/setup', methods=['GET'])
-def setup_webhooks():
-    base_url = config.RENDER_URL or request.host_url.rstrip('/')
-    tg_result = telegram_bot.set_webhook(base_url)
-    zalo_result = zalo_bot.set_webhook(base_url)
-    return jsonify({
-        'telegram_webhook': tg_result,
-        'zalo_webhook': zalo_result,
-        'base_url': base_url
-    })
-
-
-@app.route('/debug', methods=['GET'])
-def debug_info():
+@app.route('/setup')
+def setup():
+    base = config.RENDER_URL or request.host_url.rstrip('/')
+    results = {'base_url': base, 'server_time_vn': vn_now().strftime('%H:%M:%S %d/%m/%Y')}
     try:
-        tg_info = http_requests.get(
-            f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/getWebhookInfo", timeout=10
-        ).json()
-    except:
-        tg_info = {'error': 'failed'}
-    return jsonify({
+        results['telegram_webhook'] = telegram_bot.set_webhook(base)
+    except Exception as e:
+        results['telegram_webhook'] = {'error': str(e)}
+    try:
+        import zalo_bot
+        results['zalo_webhook'] = zalo_bot.set_webhook(base)
+    except Exception as e:
+        results['zalo_webhook'] = {'error': str(e)}
+    return jsonify(results)
+
+@app.route('/debug')
+def debug():
+    now = vn_now()
+    info = {
         'server': 'running',
-        'last_reset_date': last_reset_date,
-        'telegram_webhook': tg_info
-    })
+        'server_time_utc': datetime.now(timezone.utc).strftime('%H:%M:%S %d/%m/%Y'),
+        'server_time_vn': now.strftime('%H:%M:%S %d/%m/%Y'),
+        'timezone': 'UTC+7 (Vietnam/Hanoi)',
+        'last_reset_date': now.strftime('%Y-%m-%d')
+    }
+    try:
+        import requests
+        tg = requests.get(f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/getWebhookInfo", timeout=10).json()
+        info['telegram_webhook'] = tg
+    except:
+        pass
+    return jsonify(info)
 
-
-@app.route('/test-booking', methods=['GET'])
+@app.route('/test-booking')
 def test_booking():
+    test_data = {
+        'fullname': 'Test User',
+        'phone': '0901234567',
+        'email': 'test@test.com',
+        'service': 'Combo VIP - 350K',
+        'date': '2026-02-20',
+        'time': '14:00',
+        'note': f'Test lúc {vn_now().strftime("%H:%M %d/%m/%Y")} VN',
+        'source': 'Test'
+    }
     try:
-        test_data = {
-            'fullname': 'Test User', 'phone': '0901234567', 'email': 'test@test.com',
-            'service': 'Combo VIP - 350K', 'date': '2026-02-20', 'time': '14:00',
-            'note': 'Test từ trình duyệt', 'source': 'Test'
-        }
         booking_id, date_formatted = sheets.add_booking(test_data)
-        tg_result = telegram_bot.notify_new_booking(booking_id, test_data, date_formatted)
-        return jsonify({'success': True, 'booking_id': booking_id, 'telegram': tg_result})
+        tg = telegram_bot.notify_new_booking(booking_id, test_data, date_formatted)
+        return jsonify({
+            'success': True,
+            'booking_id': booking_id,
+            'date_formatted': date_formatted,
+            'server_time_vn': vn_now().strftime('%H:%M:%S %d/%m/%Y'),
+            'telegram': tg
+        })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()})
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-
-@app.route('/reset', methods=['GET'])
-def manual_reset():
+@app.route('/reset')
+def reset():
     try:
-        summary = sheets.get_daily_summary()
-        if summary:
-            msg = (
-                f"📊 <b>BÁO CÁO</b>\n📅 {summary['date']}\n━━━━━━━━━━━━━━━\n\n"
-                f"📋 Tổng: <b>{summary['total']}</b>\n"
-                f"✅ Hoàn thành: <b>{summary['completed']}</b>\n"
-                f"✔️ Xác nhận: <b>{summary['confirmed']}</b>\n"
-                f"❌ Từ chối: <b>{summary['rejected']}</b>\n"
-                f"⏳ Chờ: <b>{summary['pending']}</b>"
-            )
-            telegram_bot.send_message(config.TELEGRAM_CHAT_ID, msg)
+        send_daily_summary()
         result = sheets.clear_old_data()
-        return jsonify({'success': True, 'result': result})
+        return jsonify({
+            'success': True,
+            'cleared': result,
+            'time_vn': vn_now().strftime('%H:%M:%S %d/%m/%Y')
+        })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=config.PORT, debug=False)
+    app.run(host='0.0.0.0', port=config.PORT, debug=True)
